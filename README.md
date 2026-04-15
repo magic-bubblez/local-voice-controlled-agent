@@ -1,6 +1,6 @@
 # Voice Agent
 
-A local voice-controlled AI agent that runs entirely on your MacBook. Say a command — it transcribes, understands intent, and executes tools on your machine. No cloud, no APIs, no internet (unless you explicitly ask it to search the web).
+A local voice-controlled AI agent that runs entirely on your Mac. Say a command — it transcribes, understands intent, and executes tools on your machine. No cloud, no APIs, no internet (unless you explicitly ask it to search the web).
 
 ## What It Does
 
