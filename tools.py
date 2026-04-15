@@ -97,25 +97,7 @@ def handle_llm_generate(params: dict, context: dict) -> dict:
     if action_type == "write_code":
         context["generated_content"] = result_text
 
-    # Speak the response for chat and summary (not for code — reading code aloud is awful)
-    if action_type in ("general_chat", "summarize"):
-        _speak(result_text)
-
     return {"status": "success", "type": action_type, "content": result_text}
-
-
-def _speak(text: str):
-    """Use macOS `say` to speak text aloud. Runs async so UI isn't blocked."""
-    if not text:
-        return
-    # Truncate extremely long text to avoid endless speech
-    if len(text) > 1500:
-        text = text[:1500] + "... and more."
-    try:
-        # Popen = fire and forget, doesn't block the request
-        subprocess.Popen(["say", text])
-    except Exception:
-        pass
 
 
 def _read_file_content(path: str) -> str:

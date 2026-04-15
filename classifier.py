@@ -37,15 +37,17 @@ Create a new file or folder on the local filesystem.
 ## 2. write_code
 Generate source code. This triggers a code-generation model downstream.
 - Use when: user says "write code", "create a function", "write a script", "build a program", "implement", "code me a", or describes functionality that implies code (e.g. "a retry function", "a calculator", "a sorting algorithm")
-- IMPORTANT: if the user wants code written AND saved, emit BOTH "write_code" AND "create_file". Code generation alone does not save to disk.
+- CRITICAL: whenever you emit "write_code", you MUST also emit a "create_file" action right after it, otherwise the generated code is never saved anywhere. Never emit "write_code" alone. Code generation alone does not save to disk.
+- CRITICAL: whenever the user mentions creating a file "that does X" or "that performs X" or "with a function for X", that's actually THREE actions: create the folder if mentioned, write_code for the logic, create_file to save it. All three must be emitted.
 - params:
   - "language" (string, required): programming language. Default to "python" if ambiguous.
   - "description" (string, required): detailed description of what the code should do. Be specific — expand on what the user said. "a retry function" becomes "a retry function that wraps a callable and retries on failure with configurable max attempts and exponential backoff"
 
 ## 3. summarize
 Produce a text summary of a topic, concept, document content, or text the user provides.
-- Use when: user says "summarize", "explain", "give me an overview", "break down", "what is" (when asking for explanation of a concept, not a factual question)
-- CRITICAL: if the user wants to summarize a FILE (PDF, document, notes, etc.), emit "summarize" with a "file" parameter — the system will read the file's content and summarize it. Do NOT emit "open_app" for this case.
+- Use when: the user's command contains ANY of these trigger phrases: "summarize", "summary", "give me a summary", "give a summary", "summarise", "tldr", "explain", "give me an overview", "brief me", "break down", "tell me what's in", "what does this say", "read and summarize"
+- CRITICAL: if the user mentions ANY file/pdf/document/notes/resume/book alongside a summary phrase, emit "summarize" with a "file" parameter. The system will find the file, read its contents, and summarize. DO NOT emit "open_app" — open_app just opens things in apps, it does not produce a summary.
+- CRITICAL: "give a summary of X pdf" is ALWAYS summarize, never open_app, never general_chat.
 - params:
   - "topic" (string): what to summarize conceptually (used when no file is referenced)
   - "file" (string): name or description of the file whose content should be summarized. Leave empty if the user is asking about a topic rather than a file.
@@ -99,12 +101,16 @@ Return ONLY valid JSON. No markdown. No explanation. No text before or after.
 
 # DECISION GUIDE
 
-When classifying, follow this priority:
-1. Does the user want to OPEN/LAUNCH/VIEW something? → open_app
-2. Does the user want to CREATE a file or folder (without code)? → create_file
-3. Does the user want CODE written? → write_code (+ create_file if they want it saved)
-4. Does the user want something SUMMARIZED or EXPLAINED in depth? → summarize
-5. Everything else → general_chat
+When classifying, follow this priority — check each question in order, pick the first one that matches:
+1. Does the user want a SUMMARY, overview, TLDR, or explanation of the contents of a file/document/pdf/notes? → summarize (with file param)
+2. Does the user want a SUMMARY or explanation of a concept (no file)? → summarize (with topic param)
+3. Does the user want CODE written? → write_code + create_file (always both)
+4. Does the user want to CREATE a file or folder (without code)? → create_file
+5. Does the user want to OPEN/LAUNCH/VIEW/PLAY an app, file, or URL? → open_app
+6. Does the user want to take a SCREENSHOT? → screenshot
+7. Everything else → general_chat
+
+CRITICAL: "summarize a pdf" or "give me a summary of X" is step 1, NOT step 5. Opening a file is different from summarizing its contents.
 
 When in doubt between two actions, include BOTH. It is better to emit an extra action than to miss one.
 
@@ -122,6 +128,18 @@ User: "Summarize the concept of distributed consensus"
 User: "Summarize the Designing Data Intensive Applications PDF"
 {"actions": [{"type": "summarize", "params": {"topic": "", "file": "Designing Data Intensive Applications"}}]}
 
+User: "Give a summary of the resume PDF present in my desktop"
+{"actions": [{"type": "summarize", "params": {"topic": "", "file": "resume"}}]}
+
+User: "Give me a summary of my resume"
+{"actions": [{"type": "summarize", "params": {"topic": "", "file": "resume"}}]}
+
+User: "Brief me on what's in the notes file"
+{"actions": [{"type": "summarize", "params": {"topic": "", "file": "notes"}}]}
+
+User: "TLDR the DDIA book"
+{"actions": [{"type": "summarize", "params": {"topic": "", "file": "DDIA"}}]}
+
 User: "Read the resume on my Desktop and summarize it"
 {"actions": [{"type": "summarize", "params": {"topic": "", "file": "resume"}}]}
 
@@ -130,6 +148,12 @@ User: "Summarize notes.txt and save the summary to summary.txt"
 
 User: "Create a folder called backend and add an empty main.go file inside it"
 {"actions": [{"type": "create_file", "params": {"filename": "backend", "filetype": "folder"}}, {"type": "create_file", "params": {"filename": "backend/main.go", "filetype": "file"}}]}
+
+User: "Create a folder named testing and inside it create a file that performs all the functions of a calculator"
+{"actions": [{"type": "create_file", "params": {"filename": "testing", "filetype": "folder"}}, {"type": "write_code", "params": {"language": "python", "description": "a calculator with functions for addition, subtraction, multiplication, and division, with a simple interactive loop for user input"}}, {"type": "create_file", "params": {"filename": "testing/calculator.py", "filetype": "file"}}]}
+
+User: "Make a folder called scripts and put a python file in it that pings a url"
+{"actions": [{"type": "create_file", "params": {"filename": "scripts", "filetype": "folder"}}, {"type": "write_code", "params": {"language": "python", "description": "a script that pings a URL using requests and prints the response status code"}}, {"type": "create_file", "params": {"filename": "scripts/ping.py", "filetype": "file"}}]}
 
 User: "Open the Designing Data Intensive Applications PDF"
 {"actions": [{"type": "open_app", "params": {"app_name": "", "file": "Designing Data Intensive Applications", "url": ""}}]}
@@ -271,12 +295,51 @@ def classify_intent(text: str, session_history: list = None) -> dict:
 
     try:
         parsed = json.loads(raw)
-        # Validate structure
         if "actions" not in parsed or not isinstance(parsed["actions"], list):
             return _fallback(text)
+        # Post-process to correct common small-model mistakes
+        parsed = _correct_actions(parsed, text)
         return parsed
     except json.JSONDecodeError:
         return _fallback(text)
+
+
+def _correct_actions(parsed: dict, text: str) -> dict:
+    """
+    Deterministic post-processing: catch known small-model misclassifications
+    and correct them based on explicit keyword signals in the user's text.
+    Cheap, fast, prevents the most common failure modes.
+    """
+    text_lower = text.lower()
+    actions = parsed.get("actions", [])
+
+    summarize_triggers = (
+        "summarize", "summarise", "summary", "tldr", "tl;dr",
+        "give me a summary", "give a summary", "brief me",
+        "overview of", "break down",
+    )
+    has_summarize_word = any(t in text_lower for t in summarize_triggers)
+
+    # If the user explicitly asked for a summary, summarize wins.
+    # Drop any open_app/general_chat actions that the small model emitted by mistake.
+    # Never mix open_app with summarize — we want the content, not the app.
+    if has_summarize_word:
+        file_ref = ""
+        for a in actions:
+            if a.get("type") == "open_app":
+                p = a.get("params", {})
+                file_ref = p.get("file", "") or file_ref
+            if a.get("type") == "summarize":
+                p = a.get("params", {})
+                if p.get("file"):
+                    file_ref = p["file"]
+
+        parsed["actions"] = [{
+            "type": "summarize",
+            "params": {"topic": "" if file_ref else text, "file": file_ref}
+        }]
+
+    return parsed
 
 
 def _fallback(text: str) -> dict:
